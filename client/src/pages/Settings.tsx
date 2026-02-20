@@ -5,8 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Settings as SettingsIcon, Save, Loader2 } from "lucide-react";
+import { Settings as SettingsIcon, Save, Loader2, Lock, Eye, EyeOff, LogOut } from "lucide-react";
 import { toast } from "sonner";
+import { usePassword } from "@/contexts/PasswordContext";
 
 interface SettingItem {
   key: string;
@@ -55,10 +56,18 @@ const SETTING_DEFINITIONS: SettingItem[] = [
   },
 ];
 
-export default function Settings() {
+export default function SettingsPage() {
+  const { logout } = usePassword();
   const { data: settingsData, isLoading } = trpc.settings.list.useQuery();
   const [localSettings, setLocalSettings] = useState<Record<string, string>>({});
   const [hasChanges, setHasChanges] = useState(false);
+
+  // Password change state
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showNewPwd, setShowNewPwd] = useState(false);
+  const [showConfirmPwd, setShowConfirmPwd] = useState(false);
+  const [pwdError, setPwdError] = useState("");
 
   const updateSetting = trpc.settings.update.useMutation({
     onSuccess: () => {},
@@ -69,7 +78,6 @@ export default function Settings() {
     if (settingsData) {
       const map: Record<string, string> = {};
       settingsData.forEach((s) => (map[s.key] = s.value));
-      // Fill defaults for missing keys
       SETTING_DEFINITIONS.forEach((def) => {
         if (!map[def.key]) map[def.key] = def.value;
       });
@@ -95,6 +103,34 @@ export default function Settings() {
     }
   };
 
+  const handlePasswordChange = async () => {
+    setPwdError("");
+    if (!newPassword.trim()) {
+      setPwdError("請輸入新密碼");
+      return;
+    }
+    if (newPassword.length < 4) {
+      setPwdError("密碼至少需要 4 個字元");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwdError("兩次輸入的密碼不一致");
+      return;
+    }
+    try {
+      await updateSetting.mutateAsync({ key: "access_password", value: newPassword });
+      toast.success("密碼已更新！下次訪問時需使用新密碼");
+      setNewPassword("");
+      setConfirmPassword("");
+      // Force re-login with new password
+      setTimeout(() => {
+        logout();
+      }, 1500);
+    } catch {
+      setPwdError("密碼更新失敗，請稍後再試");
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-64">
@@ -113,7 +149,7 @@ export default function Settings() {
             系統設定
           </h1>
           <p className="text-muted-foreground text-sm mt-1">
-            調整爬蟲行為與通知偏好設定
+            調整爬蟲行為、通知偏好與訪問安全設定
           </p>
         </div>
         <Button
@@ -129,6 +165,99 @@ export default function Settings() {
           儲存設定
         </Button>
       </div>
+
+      {/* Access Password */}
+      <Card className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="text-base font-semibold flex items-center gap-2">
+            <Lock className="h-4 w-4 text-primary" />
+            訪問密碼
+          </CardTitle>
+          <CardDescription className="text-muted-foreground text-sm">
+            修改儀表板的訪問密碼。更新後將自動登出，需使用新密碼重新登入。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label className="text-sm font-medium text-foreground">新密碼</Label>
+            <div className="relative">
+              <Input
+                type={showNewPwd ? "text" : "password"}
+                value={newPassword}
+                onChange={(e) => {
+                  setNewPassword(e.target.value);
+                  setPwdError("");
+                }}
+                placeholder="輸入新密碼（至少 4 個字元）"
+                className="pr-10 bg-background border-border"
+              />
+              <button
+                type="button"
+                onClick={() => setShowNewPwd((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                tabIndex={-1}
+              >
+                {showNewPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-sm font-medium text-foreground">確認新密碼</Label>
+            <div className="relative">
+              <Input
+                type={showConfirmPwd ? "text" : "password"}
+                value={confirmPassword}
+                onChange={(e) => {
+                  setConfirmPassword(e.target.value);
+                  setPwdError("");
+                }}
+                placeholder="再次輸入新密碼"
+                className={`pr-10 bg-background border-border ${
+                  pwdError ? "border-destructive" : ""
+                }`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPwd((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                tabIndex={-1}
+              >
+                {showConfirmPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            {pwdError && (
+              <p className="text-xs text-destructive">{pwdError}</p>
+            )}
+          </div>
+
+          <Button
+            onClick={handlePasswordChange}
+            disabled={!newPassword || !confirmPassword || updateSetting.isPending}
+            variant="outline"
+            className="gap-2"
+          >
+            {updateSetting.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Lock className="h-4 w-4" />
+            )}
+            更新密碼
+          </Button>
+
+          <div className="pt-2 border-t border-border">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={logout}
+              className="gap-2 text-muted-foreground hover:text-destructive"
+            >
+              <LogOut className="h-4 w-4" />
+              登出系統
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Notification Settings */}
       <Card className="bg-card border-border">
@@ -191,7 +320,6 @@ export default function Settings() {
             </div>
           ))}
 
-          {/* User Agent */}
           <div className="space-y-2">
             <Label className="text-sm font-medium text-foreground">User Agent</Label>
             <p className="text-xs text-muted-foreground">爬蟲使用的瀏覽器識別字串</p>

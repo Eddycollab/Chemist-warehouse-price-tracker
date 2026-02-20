@@ -1,0 +1,9 @@
+{
+  "query": "INSERT INTO crawler_settings (`key`, `value`, `description`) VALUES ('access_password', 'cw2024', '儀表板訪問密碼') ON DUPLICATE KEY UPDATE value = value;",
+  "command": "mysql --batch --raw --column-names --default-character-set=utf8mb4 --host gateway02.us-east-1.prod.aws.tidbcloud.com --port 4000 --user xDjs1wKhb9v8oYP.2c46efc255ad --database FaVggcGXTFxcpjbXyGW2js --execute INSERT INTO crawler_settings (`key`, `value`, `description`) VALUES ('access_password', 'cw2024', '儀表板訪問密碼') ON DUPLICATE KEY UPDATE value = value;",
+  "rows": [],
+  "messages": [],
+  "stdout": "",
+  "stderr": "",
+  "execution_time_ms": 1560
+}

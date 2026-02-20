@@ -46,3 +46,11 @@
 - [x] 移除側邊欄底部的用戶資訊顯示，改為通知未讀數量 Badge
 - [x] 確保所有 tRPC 路由改為 publicProcedure（不需要 protectedProcedure）
 - [x] 測試所有頁面無需登入即可訪問（10 tests passed）
+
+## 簡單密碼保護功能
+- [x] 後端：在 crawler_settings 加入 access_password 設定（預設 cw2024）
+- [x] 後端：建立 access.verify 和 access.hasPassword tRPC 路由
+- [x] 前端：建立 PasswordContext（管理已驗證狀態，儲存至 localStorage，7 天有效期）
+- [x] 前端：建立密碼登入頁面（Nord 深色主題，CW Logo 風格）
+- [x] 前端：在 App.tsx 包裝密碼保護邏輯
+- [x] 系統設定：加入密碼修改功能（輸入新密碼並確認）與登出按鈕

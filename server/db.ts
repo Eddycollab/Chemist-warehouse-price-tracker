@@ -275,3 +275,14 @@ export async function updateCrawlerSetting(key: string, value: string) {
     .values({ key, value })
     .onDuplicateKeyUpdate({ set: { value } });
 }
+
+export async function getAccessPassword(): Promise<string> {
+  const db = await getDb();
+  if (!db) return "cw2024"; // fallback default
+  const result = await db
+    .select()
+    .from(crawlerSettings)
+    .where(eq(crawlerSettings.key, "access_password"))
+    .limit(1);
+  return result[0]?.value ?? "cw2024";
+}

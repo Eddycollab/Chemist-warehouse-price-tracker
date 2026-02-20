@@ -19,6 +19,7 @@ import {
   getUnreadNotificationCount,
   getCrawlerSettings,
   updateCrawlerSetting,
+  getAccessPassword,
 } from "./db";
 import { runCrawl } from "./crawler";
 import { getSchedulerStatus } from "./scheduler";
@@ -207,8 +208,24 @@ const settingsRouter = router({
     }),
 });
 
-// ─── App Router ───────────────────────────────────────────────────────────────
+// ─── Access Auth Router ─────────────────────────────────────────────────────
+const accessAuthRouter = router({
+  verify: publicProcedure
+    .input(z.object({ password: z.string() }))
+    .mutation(async ({ input }) => {
+      const stored = await getAccessPassword();
+      if (input.password === stored) {
+        return { success: true };
+      }
+      return { success: false, error: "密碼錯誤，請重試" };
+    }),
+  hasPassword: publicProcedure.query(async () => {
+    const pwd = await getAccessPassword();
+    return { enabled: pwd.length > 0 };
+  }),
+});
 
+// ─── App Router ───────────────────────────────────────────────────────────────
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -219,6 +236,7 @@ export const appRouter = router({
       return { success: true } as const;
     }),
   }),
+  access: accessAuthRouter,
   product: productRouter,
   priceHistory: priceHistoryRouter,
   crawl: crawlRouter,
