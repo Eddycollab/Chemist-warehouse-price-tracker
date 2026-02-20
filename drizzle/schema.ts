@@ -97,7 +97,7 @@ export type InsertPriceHistory = typeof priceHistory.$inferInsert;
 export const crawlJobs = mysqlTable("crawl_jobs", {
   id: int("id").autoincrement().primaryKey(),
   jobType: mysqlEnum("jobType", ["scheduled", "manual"]).default("manual").notNull(),
-  status: mysqlEnum("status", ["pending", "running", "completed", "failed"]).default("pending").notNull(),
+  status: mysqlEnum("status", ["pending", "running", "completed", "failed", "stopped"]).default("pending").notNull(),
   category: mysqlEnum("category", [...PRODUCT_CATEGORIES, "all"]).default("all"),
   totalProducts: int("totalProducts").default(0),
   crawledProducts: int("crawledProducts").default(0),

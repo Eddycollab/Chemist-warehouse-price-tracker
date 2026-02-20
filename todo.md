@@ -63,3 +63,10 @@
 - [x] 前端：建立 Excel 匯入 UI（拖曳上傳、欄位預覽、確認匯入）
 - [x] 提供 Excel 範本下載功能
 - [x] 撰寫完整 Railway 部署指南（RAILWAY_DEPLOY.md）
+
+## 停止爬取功能
+- [x] 後端：在 crawler.ts 加入全域停止旗標（isCrawlStopped）
+- [x] 後端：在爬蟲主迴圈各關鍵點檢查停止旗標
+- [x] 後端：在 routers.ts 加入 crawl.stop tRPC mutation
+- [x] 前端：在 CrawlerManager.tsx 加入「停止爬取」按鈕（執行中才顯示）
+- [x] 前端：停止後更新任務狀態顯示

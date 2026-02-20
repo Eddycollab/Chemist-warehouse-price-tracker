@@ -5,11 +5,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Bot,
   Play,
+  Square,
   Clock,
   CheckCircle2,
   AlertCircle,
   Loader2,
   RefreshCw,
+  XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { CATEGORY_LABELS } from "../lib/categoryLabels";
@@ -34,6 +36,8 @@ function getStatusBadge(status: string) {
       return <Badge className="bg-yellow-500/20 text-yellow-400 border-yellow-500/30 text-xs">執行中</Badge>;
     case "failed":
       return <Badge className="bg-red-500/20 text-red-400 border-red-500/30 text-xs">失敗</Badge>;
+    case "stopped":
+      return <Badge className="bg-orange-500/20 text-orange-400 border-orange-500/30 text-xs">已中止</Badge>;
     default:
       return <Badge variant="secondary" className="text-xs">待機</Badge>;
   }
@@ -51,7 +55,12 @@ const CRAWL_CATEGORIES = [
 export default function CrawlerManager() {
   const { data: jobs, isLoading: jobsLoading, refetch: refetchJobs } = trpc.crawl.jobs.useQuery({ limit: 20 });
   const { data: schedulerStatus } = trpc.crawl.schedulerStatus.useQuery(undefined, { refetchInterval: 10000 });
+  const { data: runningStatus, refetch: refetchRunning } = trpc.crawl.isRunning.useQuery(undefined, {
+    refetchInterval: 3000,
+  });
   const utils = trpc.useUtils();
+
+  const isCrawling = runningStatus?.running ?? false;
 
   const triggerCrawl = trpc.crawl.trigger.useMutation({
     onSuccess: (_, vars) => {
@@ -61,10 +70,27 @@ export default function CrawlerManager() {
       toast.success(`已啟動爬蟲任務（${catLabel}）！`);
       setTimeout(() => {
         refetchJobs();
+        refetchRunning();
         utils.crawl.latestJob.invalidate();
       }, 2000);
     },
     onError: () => toast.error("啟動爬蟲失敗"),
+  });
+
+  const stopCrawl = trpc.crawl.stop.useMutation({
+    onSuccess: (data) => {
+      if (data.success) {
+        toast.success(data.message);
+      } else {
+        toast.info(data.message);
+      }
+      setTimeout(() => {
+        refetchJobs();
+        refetchRunning();
+        utils.crawl.latestJob.invalidate();
+      }, 2000);
+    },
+    onError: () => toast.error("停止爬蟲失敗"),
   });
 
   return (
@@ -79,6 +105,33 @@ export default function CrawlerManager() {
           手動觸發爬蟲任務或查看爬取歷史記錄
         </p>
       </div>
+
+      {/* Running Status Banner */}
+      {isCrawling && (
+        <div className="flex items-center justify-between rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <Loader2 className="h-5 w-5 text-yellow-400 animate-spin" />
+            <div>
+              <p className="text-sm font-medium text-yellow-300">爬蟲任務執行中</p>
+              <p className="text-xs text-yellow-400/70">正在掃描 Chemist Warehouse 商品頁面，請稍候...</p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2 border-red-500/50 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+            disabled={stopCrawl.isPending}
+            onClick={() => stopCrawl.mutate()}
+          >
+            {stopCrawl.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Square className="h-3.5 w-3.5 fill-current" />
+            )}
+            停止爬取
+          </Button>
+        </div>
+      )}
 
       {/* Scheduler Status */}
       <Card className="bg-card border-border">
@@ -126,7 +179,7 @@ export default function CrawlerManager() {
                 variant="outline"
                 size="sm"
                 className="gap-2 border-border hover:border-primary/50"
-                disabled={triggerCrawl.isPending}
+                disabled={triggerCrawl.isPending || isCrawling}
                 onClick={() => triggerCrawl.mutate({ category: cat.value })}
               >
                 {triggerCrawl.isPending ? (
@@ -138,6 +191,12 @@ export default function CrawlerManager() {
               </Button>
             ))}
           </div>
+          {isCrawling && (
+            <p className="text-xs text-yellow-400/70 mt-3 flex items-center gap-1">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              爬蟲執行中，請先停止後再啟動新任務
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -193,6 +252,8 @@ export default function CrawlerManager() {
                             <Loader2 className="h-3.5 w-3.5 text-yellow-400 animate-spin" />
                           ) : job.status === "completed" ? (
                             <CheckCircle2 className="h-3.5 w-3.5 text-green-400" />
+                          ) : job.status === "stopped" ? (
+                            <XCircle className="h-3.5 w-3.5 text-orange-400" />
                           ) : (
                             <AlertCircle className="h-3.5 w-3.5 text-red-400" />
                           )}

@@ -21,7 +21,7 @@ import {
   updateCrawlerSetting,
   getAccessPassword,
 } from "./db";
-import { runCrawl } from "./crawler";
+import { runCrawl, stopCrawl, isCrawlRunning } from "./crawler";
 import * as XLSX from "xlsx";
 import { getSchedulerStatus } from "./scheduler";
 import { PRODUCT_CATEGORIES } from "../drizzle/schema";
@@ -278,6 +278,18 @@ const crawlRouter = router({
 
   schedulerStatus: publicProcedure.query(() => {
     return getSchedulerStatus();
+  }),
+
+  isRunning: publicProcedure.query(() => {
+    return { running: isCrawlRunning() };
+  }),
+
+  stop: publicProcedure.mutation(() => {
+    const result = stopCrawl();
+    if (result.stopped) {
+      return { success: true, message: `已發送停止指令，爬蟲將在完成目前頁面後停止` };
+    }
+    return { success: false, message: "目前沒有正在執行的爬蟲任務" };
   }),
 });
 

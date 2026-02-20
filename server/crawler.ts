@@ -36,6 +36,26 @@ export interface CrawledProductData {
 
 const CRAWL_DELAY_MS = 1500;
 
+// ─── Crawl Stop Control ───────────────────────────────────────────────────────
+
+let _crawlStopped = false;
+let _currentJobId: number | null = null;
+
+/** Request the running crawl job to stop gracefully. */
+export function stopCrawl(): { stopped: boolean; jobId: number | null } {
+  if (_currentJobId !== null) {
+    _crawlStopped = true;
+    console.log(`[Crawler] Stop requested for job #${_currentJobId}`);
+    return { stopped: true, jobId: _currentJobId };
+  }
+  return { stopped: false, jobId: null };
+}
+
+/** Returns true if a crawl is currently running. */
+export function isCrawlRunning(): boolean {
+  return _currentJobId !== null;
+}
+
 // Category URL mappings for Chemist Warehouse
 const CATEGORY_URLS: Record<string, { id: number; slug: string; label: string }[]> = {
   beauty_skincare: [
@@ -366,6 +386,10 @@ export async function runCrawl(options: {
 
   const jobId = (jobResult as { insertId?: number })?.insertId || 0;
 
+  // Register this job as the active job and reset stop flag
+  _currentJobId = jobId;
+  _crawlStopped = false;
+
   let crawledCount = 0;
   let failedCount = 0;
   let newProductsCount = 0;
@@ -385,8 +409,16 @@ export async function runCrawl(options: {
       const existingUrls = new Set(existingProducts.map((p) => p.url.toLowerCase()));
 
       for (const cat of targetCategories) {
+        if (_crawlStopped) {
+          console.log("[Crawler] Stop flag detected, aborting category loop");
+          break;
+        }
         const categoryUrls = CATEGORY_URLS[cat] || [];
         for (const catInfo of categoryUrls) {
+          if (_crawlStopped) {
+            console.log("[Crawler] Stop flag detected, aborting sub-category loop");
+            break;
+          }
           try {
             const discovered = await scrapeCategoryPage(catInfo.id, catInfo.slug, 2);
             console.log(`[Crawler] Discovered ${discovered.length} products in ${catInfo.label}`);
@@ -480,10 +512,13 @@ export async function runCrawl(options: {
     failedCount++;
   } finally {
     await closeBrowser();
+    _currentJobId = null;
+    _crawlStopped = false;
   }
 
+  const wasStopped = _crawlStopped;
   await updateCrawlJob(jobId, {
-    status: failedCount > 0 && crawledCount === 0 ? "failed" : "completed",
+    status: wasStopped ? "stopped" : (failedCount > 0 && crawledCount === 0 ? "failed" : "completed"),
     crawledProducts: crawledCount,
     failedProducts: failedCount,
     completedAt: new Date(),
@@ -500,7 +535,9 @@ export async function runCrawl(options: {
     }
   }
 
-  const message = `爬取完成：更新 ${crawledCount} 個，新增 ${newProductsCount} 個，失敗 ${failedCount} 個`;
+  const message = wasStopped
+    ? `爬取已中止：已更新 ${crawledCount} 個，新增 ${newProductsCount} 個`
+    : `爬取完成：更新 ${crawledCount} 個，新增 ${newProductsCount} 個，失敗 ${failedCount} 個`;
   console.log(`[Crawler] Job ${jobId} completed: ${message}`);
 
   return { jobId, success: crawledCount > 0 || newProductsCount > 0, message };
