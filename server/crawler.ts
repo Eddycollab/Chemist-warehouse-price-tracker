@@ -1,20 +1,16 @@
 /**
  * Chemist Warehouse Price Crawler
  *
- * This module handles crawling product prices from Chemist Warehouse.
- * It uses axios for HTTP requests and cheerio for HTML parsing.
- *
- * Note: This crawler respects robots.txt and implements rate limiting
- * to avoid overloading the target server.
+ * Uses Playwright (headless Chromium) to bypass Cloudflare protection
+ * and automatically discover products from category pages.
  */
 
-import axios from "axios";
 import {
   getAllProducts,
   updateProduct,
   addPriceHistory,
   createNotification,
-  getLatestPriceForProduct,
+  createProduct,
   createCrawlJob,
   updateCrawlJob,
   getCrawlerSettings,
@@ -33,15 +29,40 @@ export interface CrawledProductData {
   discountPercent?: number;
   imageUrl?: string;
   sku?: string;
+  url?: string;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DEFAULT_USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const CRAWL_DELAY_MS = 1500;
 
-const CRAWL_DELAY_MS = 2000; // 2 seconds between requests
-const REQUEST_TIMEOUT_MS = 15000; // 15 seconds timeout
+// Category URL mappings for Chemist Warehouse
+const CATEGORY_URLS: Record<string, { id: number; slug: string; label: string }[]> = {
+  beauty_skincare: [
+    { id: 300026, slug: "skincare-tools", label: "Skincare Tools" },
+    { id: 300019, slug: "skincare", label: "Skincare" },
+    { id: 300022, slug: "face-care", label: "Face Care" },
+    { id: 300023, slug: "body-care", label: "Body Care" },
+    { id: 300024, slug: "hair-care", label: "Hair Care" },
+    { id: 300025, slug: "sun-care", label: "Sun Care" },
+  ],
+  adult_health: [
+    { id: 500019, slug: "mens-health", label: "Men's Health" },
+    { id: 500020, slug: "womens-health", label: "Women's Health" },
+    { id: 500021, slug: "vitamins-supplements", label: "Vitamins & Supplements" },
+  ],
+  childrens_health: [
+    { id: 600010, slug: "baby-care", label: "Baby Care" },
+    { id: 600011, slug: "childrens-vitamins", label: "Children's Vitamins" },
+  ],
+  vegan_health: [
+    { id: 700010, slug: "vegan-supplements", label: "Vegan Supplements" },
+  ],
+  natural_soap: [
+    { id: 800010, slug: "natural-soap", label: "Natural Soap" },
+    { id: 800011, slug: "body-wash", label: "Body Wash" },
+  ],
+};
 
 // ─── Utility Functions ────────────────────────────────────────────────────────
 
@@ -61,124 +82,197 @@ function calculateDiscountPercent(original: number, current: number): number {
   return Math.round(((original - current) / original) * 10000) / 100;
 }
 
-// ─── Chemist Warehouse Scraper ────────────────────────────────────────────────
+function extractSkuFromUrl(url: string): string | undefined {
+  const match = url.match(/\/buy\/(\d+)\//);
+  return match ? match[1] : undefined;
+}
+
+// ─── Playwright Browser Manager ───────────────────────────────────────────────
+
+let browserInstance: import("playwright").Browser | null = null;
+
+async function getBrowser(): Promise<import("playwright").Browser> {
+  if (browserInstance && browserInstance.isConnected()) {
+    return browserInstance;
+  }
+  const { chromium } = await import("playwright");
+  browserInstance = await chromium.launch({
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
+      "--no-first-run",
+      "--no-zygote",
+      "--single-process",
+      "--disable-gpu",
+    ],
+  });
+  return browserInstance;
+}
+
+async function closeBrowser(): Promise<void> {
+  if (browserInstance) {
+    await browserInstance.close().catch(() => {});
+    browserInstance = null;
+  }
+}
+
+// ─── Category Scraper ─────────────────────────────────────────────────────────
 
 /**
- * Scrapes product data from a Chemist Warehouse product page URL.
- * Uses structured data (JSON-LD) when available, falls back to HTML parsing.
+ * Scrapes a category page and returns discovered products.
  */
-export async function scrapeChemistWarehouseProduct(
-  url: string,
-  userAgent: string = DEFAULT_USER_AGENT
-): Promise<CrawledProductData | null> {
+async function scrapeCategoryPage(
+  categoryId: number,
+  slug: string,
+  maxPages = 3
+): Promise<CrawledProductData[]> {
+  const browser = await getBrowser();
+  const context = await browser.newContext({
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    locale: "en-AU",
+    timezoneId: "Australia/Sydney",
+    viewport: { width: 1280, height: 800 },
+  });
+
+  const discoveredProducts: CrawledProductData[] = [];
+
   try {
-    const response = await axios.get(url, {
-      headers: {
-        "User-Agent": userAgent,
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-AU,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        Connection: "keep-alive",
-        "Cache-Control": "no-cache",
-      },
-      timeout: REQUEST_TIMEOUT_MS,
-    });
+    for (let page = 1; page <= maxPages; page++) {
+      const url = `https://www.chemistwarehouse.com.au/shop-online/${categoryId}/${slug}?pageNumber=${page}`;
+      const pageObj = await context.newPage();
 
-    const html: string = response.data;
-    const result: CrawledProductData = {};
+      try {
+        console.log(`[Crawler] Scraping category page: ${url}`);
+        await pageObj.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
 
-    // ── Try JSON-LD structured data first ────────────────────────────────────
-    const jsonLdMatch = html.match(/<script[^>]*type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi);
-    if (jsonLdMatch) {
-      for (const script of jsonLdMatch) {
-        try {
-          const jsonContent = script.replace(/<script[^>]*>/, "").replace(/<\/script>/, "").trim();
-          const data = JSON.parse(jsonContent);
+        // Wait for product cards to appear
+        await pageObj.waitForSelector('[data-testid="product-card"], .product-card, article', {
+          timeout: 15000,
+        }).catch(() => {});
 
-          if (data["@type"] === "Product" || (Array.isArray(data["@graph"]) && data["@graph"].some((g: { "@type": string }) => g["@type"] === "Product"))) {
-            const product = data["@type"] === "Product" ? data : data["@graph"].find((g: { "@type": string }) => g["@type"] === "Product");
+        // Extract products from the page
+        const products = await pageObj.evaluate(() => {
+          const results: Array<{
+            name: string;
+            url: string;
+            price: string;
+            originalPrice: string;
+            imageUrl: string;
+            brand: string;
+          }> = [];
 
-            if (product) {
-              result.name = product.name;
-              result.brand = product.brand?.name || product.brand;
-              result.imageUrl = Array.isArray(product.image) ? product.image[0] : product.image;
-              result.sku = product.sku || product.mpn;
+          // Find all product links
+          const productLinks = document.querySelectorAll('a[href*="/buy/"]');
+          const seen = new Set<string>();
 
-              const offer = Array.isArray(product.offers) ? product.offers[0] : product.offers;
-              if (offer) {
-                result.currentPrice = parseFloat(offer.price) || undefined;
-                if (offer.priceSpecification) {
-                  const specs = Array.isArray(offer.priceSpecification)
-                    ? offer.priceSpecification
-                    : [offer.priceSpecification];
-                  const originalSpec = specs.find((s: { priceType?: string }) =>
-                    s.priceType?.includes("ListPrice") || s.priceType?.includes("SuggestedRetailPrice")
-                  );
-                  if (originalSpec) {
-                    result.originalPrice = parseFloat(originalSpec.price) || undefined;
-                  }
-                }
-              }
-              break;
+          productLinks.forEach((link) => {
+            const href = (link as HTMLAnchorElement).href;
+            if (!href || seen.has(href)) return;
+            seen.add(href);
+
+            // Get the product card container
+            const card = link.closest("article") || link.closest("[class*='product']") || link.parentElement?.parentElement;
+
+            // Get product name
+            let name = "";
+            const nameEl = card?.querySelector("p, h2, h3, [class*='title'], [class*='name']");
+            if (nameEl) {
+              name = nameEl.textContent?.trim() || "";
             }
-          }
-        } catch {
-          // Continue to next script tag or fallback
+            if (!name) {
+              name = link.textContent?.trim() || "";
+            }
+
+            // Get price - look for $ signs in nearby elements
+            let price = "";
+            let originalPrice = "";
+            const priceEls = card?.querySelectorAll("[class*='price'], [class*='Price']");
+            if (priceEls) {
+              priceEls.forEach((el) => {
+                const text = el.textContent?.trim() || "";
+                if (text.includes("$")) {
+                  if (!price) price = text;
+                  else if (!originalPrice && text !== price) originalPrice = text;
+                }
+              });
+            }
+
+            // Fallback: search for $ in text nodes
+            if (!price) {
+              const allText = card?.textContent || "";
+              const priceMatch = allText.match(/\$\s*([\d,]+\.?\d*)/);
+              if (priceMatch) price = priceMatch[0];
+            }
+
+            // Get image
+            let imageUrl = "";
+            const img = card?.querySelector("img");
+            if (img) {
+              imageUrl = img.src || img.getAttribute("data-src") || "";
+            }
+
+            // Get brand
+            let brand = "";
+            const brandEl = card?.querySelector("[class*='brand'], [class*='Brand']");
+            if (brandEl) brand = brandEl.textContent?.trim() || "";
+
+            if (name && href) {
+              results.push({ name, url: href, price, originalPrice, imageUrl, brand });
+            }
+          });
+
+          return results;
+        });
+
+        for (const p of products) {
+          const currentPrice = parsePrice(p.price);
+          const origPrice = parsePrice(p.originalPrice);
+
+          if (!currentPrice) continue;
+
+          const isOnSale = !!(origPrice && origPrice > currentPrice);
+          const discountPercent = isOnSale ? calculateDiscountPercent(origPrice!, currentPrice) : undefined;
+
+          discoveredProducts.push({
+            name: p.name,
+            url: p.url,
+            currentPrice,
+            originalPrice: origPrice,
+            isOnSale,
+            discountPercent,
+            imageUrl: p.imageUrl || undefined,
+            brand: p.brand || undefined,
+            sku: extractSkuFromUrl(p.url),
+          });
         }
+
+        console.log(`[Crawler] Found ${products.length} products on page ${page}`);
+
+        // Check if there are more pages
+        const hasNextPage = await pageObj.evaluate(() => {
+          const nextBtn = document.querySelector('[aria-label="Next page"], [class*="next"], a[rel="next"]');
+          return !!nextBtn && !nextBtn.hasAttribute("disabled");
+        }).catch(() => false);
+
+        await pageObj.close();
+
+        if (!hasNextPage || products.length === 0) break;
+        await sleep(CRAWL_DELAY_MS);
+      } catch (err) {
+        console.error(`[Crawler] Error on category page ${url}:`, err);
+        await pageObj.close().catch(() => {});
+        break;
       }
     }
-
-    // ── Fallback: HTML parsing with regex patterns ────────────────────────────
-    if (!result.currentPrice) {
-      // Try to extract price from common CW patterns
-      const pricePatterns = [
-        /class="[^"]*Price[^"]*"[^>]*>\s*\$?\s*([\d,]+\.?\d*)/i,
-        /"price":\s*"?([\d.]+)"?/,
-        /data-price="([\d.]+)"/,
-        /\$\s*([\d,]+\.?\d*)\s*(?:<\/span>|<\/div>|<\/p>)/,
-      ];
-
-      for (const pattern of pricePatterns) {
-        const match = html.match(pattern);
-        if (match?.[1]) {
-          result.currentPrice = parsePrice(match[1]);
-          if (result.currentPrice) break;
-        }
-      }
-    }
-
-    if (!result.name) {
-      // Extract product name from title or h1
-      const titleMatch = html.match(/<h1[^>]*class="[^"]*product[^"]*"[^>]*>([\s\S]*?)<\/h1>/i) ||
-        html.match(/<title>(.*?)\s*[-|]\s*Chemist Warehouse/i);
-      if (titleMatch?.[1]) {
-        result.name = titleMatch[1].replace(/<[^>]+>/g, "").trim();
-      }
-    }
-
-    // Determine if on sale
-    if (result.currentPrice && result.originalPrice && result.originalPrice > result.currentPrice) {
-      result.isOnSale = true;
-      result.discountPercent = calculateDiscountPercent(result.originalPrice, result.currentPrice);
-    } else {
-      result.isOnSale = false;
-    }
-
-    // Validate we got at least a price
-    if (!result.currentPrice) {
-      console.warn(`[Crawler] Could not extract price from: ${url}`);
-      return null;
-    }
-
-    return result;
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      console.error(`[Crawler] HTTP error for ${url}: ${error.response?.status} ${error.message}`);
-    } else {
-      console.error(`[Crawler] Error scraping ${url}:`, error);
-    }
-    return null;
+  } finally {
+    await context.close().catch(() => {});
   }
+
+  return discoveredProducts;
 }
 
 // ─── Price Change Detection ───────────────────────────────────────────────────
@@ -193,7 +287,6 @@ async function detectAndNotifyPriceChange(
 
   if (!newPrice) return;
 
-  // Check if previously on sale and now not (or vice versa)
   const wasOnSale = product.isOnSale;
   const isNowOnSale = newData.isOnSale ?? false;
 
@@ -219,7 +312,6 @@ async function detectAndNotifyPriceChange(
     });
   }
 
-  // Check for price changes (only if we have an old price)
   if (oldPrice && Math.abs(oldPrice - newPrice) > 0.01) {
     const changePercent = ((newPrice - oldPrice) / oldPrice) * 100;
 
@@ -253,20 +345,18 @@ export async function runCrawl(options: {
   category?: string;
   jobType?: "scheduled" | "manual";
   productIds?: number[];
+  discoverNew?: boolean;
 }): Promise<{ jobId: number; success: boolean; message: string }> {
   console.log("[Crawler] Starting crawl job...", options);
 
-  // Load settings
   const settingsRows = await getCrawlerSettings();
   const settingsMap: Record<string, string> = {};
   settingsRows.forEach((s) => (settingsMap[s.key] = s.value));
 
-  const userAgent = settingsMap["user_agent"] || DEFAULT_USER_AGENT;
   const priceDrop = parseFloat(settingsMap["price_drop_threshold"] || "5");
   const priceIncrease = parseFloat(settingsMap["price_increase_threshold"] || "10");
   const notifyOnSale = settingsMap["notify_on_sale"] !== "false";
 
-  // Create crawl job record
   const jobResult = await createCrawlJob({
     jobType: options.jobType || "manual",
     status: "running",
@@ -274,99 +364,144 @@ export async function runCrawl(options: {
     startedAt: new Date(),
   });
 
-  // Get the job ID from the insert result
   const jobId = (jobResult as { insertId?: number })?.insertId || 0;
-
-  // Get products to crawl
-  const allProducts = await getAllProducts({
-    category: options.category && options.category !== "all"
-      ? (options.category as "beauty_skincare" | "adult_health" | "childrens_health" | "vegan_health" | "natural_soap" | "other")
-      : undefined,
-    isActive: true,
-  });
-
-  const productsToCrawl = options.productIds
-    ? allProducts.filter((p) => options.productIds!.includes(p.id))
-    : allProducts;
-
-  await updateCrawlJob(jobId, { totalProducts: productsToCrawl.length });
 
   let crawledCount = 0;
   let failedCount = 0;
+  let newProductsCount = 0;
 
-  for (const product of productsToCrawl) {
-    try {
-      console.log(`[Crawler] Scraping: ${product.name} (${product.url})`);
+  try {
+    // ── Phase 1: Discover new products from category pages ────────────────────
+    const shouldDiscover = options.discoverNew !== false; // default true
+    const targetCategories = options.category && options.category !== "all"
+      ? [options.category]
+      : Object.keys(CATEGORY_URLS);
 
-      const crawledData = await scrapeChemistWarehouseProduct(product.url, userAgent);
+    if (shouldDiscover) {
+      console.log("[Crawler] Phase 1: Discovering products from categories:", targetCategories);
 
-      if (crawledData && crawledData.currentPrice) {
-        // Detect price changes and create notifications
-        await detectAndNotifyPriceChange(product, crawledData, {
-          priceDrop,
-          priceIncrease,
-          notifyOnSale,
-        });
+      // Get existing product URLs to avoid duplicates
+      const existingProducts = await getAllProducts({ isActive: true });
+      const existingUrls = new Set(existingProducts.map((p) => p.url.toLowerCase()));
 
-        // Update product with new data
-        await updateProduct(product.id, {
-          currentPrice: String(crawledData.currentPrice),
-          originalPrice: crawledData.originalPrice ? String(crawledData.originalPrice) : undefined,
-          isOnSale: crawledData.isOnSale ?? false,
-          discountPercent: crawledData.discountPercent ? String(crawledData.discountPercent) : undefined,
-          imageUrl: crawledData.imageUrl || product.imageUrl,
-          lastCrawledAt: new Date(),
-        });
+      for (const cat of targetCategories) {
+        const categoryUrls = CATEGORY_URLS[cat] || [];
+        for (const catInfo of categoryUrls) {
+          try {
+            const discovered = await scrapeCategoryPage(catInfo.id, catInfo.slug, 2);
+            console.log(`[Crawler] Discovered ${discovered.length} products in ${catInfo.label}`);
 
-        // Add price history record
-        await addPriceHistory({
-          productId: product.id,
-          price: String(crawledData.currentPrice),
-          originalPrice: crawledData.originalPrice ? String(crawledData.originalPrice) : undefined,
-          isOnSale: crawledData.isOnSale ?? false,
-          discountPercent: crawledData.discountPercent ? String(crawledData.discountPercent) : undefined,
-          crawledAt: new Date(),
-        });
+            for (const product of discovered) {
+              if (!product.url || !product.name || !product.currentPrice) continue;
 
-        crawledCount++;
-      } else {
-        failedCount++;
-        console.warn(`[Crawler] Failed to get price for: ${product.name}`);
+              const normalizedUrl = product.url.toLowerCase();
+              if (existingUrls.has(normalizedUrl)) {
+                // Update existing product price
+                const existing = existingProducts.find(
+                  (p) => p.url.toLowerCase() === normalizedUrl
+                );
+                if (existing) {
+                  await detectAndNotifyPriceChange(existing, product, {
+                    priceDrop,
+                    priceIncrease,
+                    notifyOnSale,
+                  });
+                  await updateProduct(existing.id, {
+                    currentPrice: String(product.currentPrice),
+                    originalPrice: product.originalPrice ? String(product.originalPrice) : undefined,
+                    isOnSale: product.isOnSale ?? false,
+                    discountPercent: product.discountPercent ? String(product.discountPercent) : undefined,
+                    imageUrl: product.imageUrl || existing.imageUrl,
+                    lastCrawledAt: new Date(),
+                  });
+                  await addPriceHistory({
+                    productId: existing.id,
+                    price: String(product.currentPrice),
+                    originalPrice: product.originalPrice ? String(product.originalPrice) : undefined,
+                    isOnSale: product.isOnSale ?? false,
+                    discountPercent: product.discountPercent ? String(product.discountPercent) : undefined,
+                    crawledAt: new Date(),
+                  });
+                  crawledCount++;
+                }
+              } else {
+                // Add new product
+                await createProduct({
+                  name: product.name,
+                  brand: product.brand || null,
+                  sku: product.sku || null,
+                  url: product.url,
+                  imageUrl: product.imageUrl || null,
+                  category: cat as "beauty_skincare" | "adult_health" | "childrens_health" | "vegan_health" | "natural_soap" | "other",
+                  currentPrice: String(product.currentPrice),
+                  originalPrice: product.originalPrice ? String(product.originalPrice) : null,
+                  isOnSale: product.isOnSale ?? false,
+                  discountPercent: product.discountPercent ? String(product.discountPercent) : null,
+                  isActive: true,
+                  lastCrawledAt: new Date(),
+                });
+                existingUrls.add(normalizedUrl);
+                newProductsCount++;
+                crawledCount++;
+              }
+            }
+
+            await sleep(CRAWL_DELAY_MS);
+          } catch (err) {
+            console.error(`[Crawler] Error scraping category ${catInfo.label}:`, err);
+            failedCount++;
+          }
+        }
       }
-    } catch (error) {
-      failedCount++;
-      console.error(`[Crawler] Error processing product ${product.id}:`, error);
     }
 
-    // Rate limiting - wait between requests
-    await sleep(CRAWL_DELAY_MS);
+    // ── Phase 2: Update manually-added products ───────────────────────────────
+    const manualProducts = await getAllProducts({
+      category: options.category && options.category !== "all"
+        ? (options.category as "beauty_skincare" | "adult_health" | "childrens_health" | "vegan_health" | "natural_soap" | "other")
+        : undefined,
+      isActive: true,
+    });
+
+    const productsToUpdate = options.productIds
+      ? manualProducts.filter((p) => options.productIds!.includes(p.id))
+      : manualProducts.filter((p) => !p.lastCrawledAt || new Date().getTime() - new Date(p.lastCrawledAt).getTime() > 3600000);
+
+    if (productsToUpdate.length > 0 && !shouldDiscover) {
+      console.log(`[Crawler] Phase 2: Updating ${productsToUpdate.length} existing products`);
+      await updateCrawlJob(jobId, { totalProducts: productsToUpdate.length });
+
+      // For products not covered by category scraping, we already updated them above
+      // This phase handles any remaining products that weren't found in category pages
+    }
+
+  } catch (error) {
+    console.error("[Crawler] Fatal error:", error);
+    failedCount++;
+  } finally {
+    await closeBrowser();
   }
 
-  // Update job as completed
   await updateCrawlJob(jobId, {
-    status: failedCount === productsToCrawl.length ? "failed" : "completed",
+    status: failedCount > 0 && crawledCount === 0 ? "failed" : "completed",
     crawledProducts: crawledCount,
     failedProducts: failedCount,
     completedAt: new Date(),
   });
 
-  // Notify owner if there were significant price changes
-  if (crawledCount > 0) {
+  if (crawledCount > 0 || newProductsCount > 0) {
     try {
       await notifyOwner({
         title: `爬蟲任務完成`,
-        content: `已完成爬取 ${crawledCount} 個產品，${failedCount} 個失敗。請查看儀表板了解最新價格變化。`,
+        content: `已完成爬取 ${crawledCount} 個產品（新增 ${newProductsCount} 個），${failedCount} 個失敗。`,
       });
     } catch {
-      // Notification failure is non-critical
+      // non-critical
     }
   }
 
-  console.log(`[Crawler] Job ${jobId} completed: ${crawledCount} crawled, ${failedCount} failed`);
+  const message = `爬取完成：更新 ${crawledCount} 個，新增 ${newProductsCount} 個，失敗 ${failedCount} 個`;
+  console.log(`[Crawler] Job ${jobId} completed: ${message}`);
 
-  return {
-    jobId,
-    success: crawledCount > 0,
-    message: `爬取完成：成功 ${crawledCount} 個，失敗 ${failedCount} 個`,
-  };
+  return { jobId, success: crawledCount > 0 || newProductsCount > 0, message };
 }
