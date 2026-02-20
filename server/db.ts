@@ -1,5 +1,6 @@
 import { eq, desc, and, gte, lte, like, or, sql, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
+import mysql from "mysql2/promise";
 import {
   InsertUser,
   users,
@@ -17,10 +18,106 @@ import {
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
+let _migrated = false;
+
+async function runMigrations(connectionString: string) {
+  if (_migrated) return;
+  try {
+    const conn = await mysql.createConnection(connectionString);
+    // Create all tables if they don't exist
+    await conn.execute(`CREATE TABLE IF NOT EXISTS \`users\` (
+      \`id\` int AUTO_INCREMENT NOT NULL,
+      \`openId\` varchar(64) NOT NULL,
+      \`name\` text,
+      \`email\` varchar(320),
+      \`loginMethod\` varchar(64),
+      \`role\` enum('user','admin') NOT NULL DEFAULT 'user',
+      \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+      \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+      \`lastSignedIn\` timestamp NOT NULL DEFAULT (now()),
+      CONSTRAINT \`users_id\` PRIMARY KEY(\`id\`),
+      CONSTRAINT \`users_openId_unique\` UNIQUE(\`openId\`)
+    )`);
+    await conn.execute(`CREATE TABLE IF NOT EXISTS \`crawl_jobs\` (
+      \`id\` int AUTO_INCREMENT NOT NULL,
+      \`jobType\` enum('scheduled','manual') NOT NULL DEFAULT 'manual',
+      \`status\` enum('pending','running','completed','failed') NOT NULL DEFAULT 'pending',
+      \`category\` enum('beauty_skincare','adult_health','childrens_health','vegan_health','natural_soap','other','all') DEFAULT 'all',
+      \`totalProducts\` int DEFAULT 0,
+      \`crawledProducts\` int DEFAULT 0,
+      \`failedProducts\` int DEFAULT 0,
+      \`errorMessage\` text,
+      \`startedAt\` timestamp NULL,
+      \`completedAt\` timestamp NULL,
+      \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+      CONSTRAINT \`crawl_jobs_id\` PRIMARY KEY(\`id\`)
+    )`);
+    await conn.execute(`CREATE TABLE IF NOT EXISTS \`crawler_settings\` (
+      \`id\` int AUTO_INCREMENT NOT NULL,
+      \`key\` varchar(100) NOT NULL,
+      \`value\` text NOT NULL,
+      \`description\` text,
+      \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+      CONSTRAINT \`crawler_settings_id\` PRIMARY KEY(\`id\`),
+      CONSTRAINT \`crawler_settings_key_unique\` UNIQUE(\`key\`)
+    )`);
+    await conn.execute(`CREATE TABLE IF NOT EXISTS \`notifications\` (
+      \`id\` int AUTO_INCREMENT NOT NULL,
+      \`productId\` int NOT NULL,
+      \`type\` enum('price_drop','price_increase','new_sale','sale_ended') NOT NULL,
+      \`title\` varchar(500) NOT NULL,
+      \`message\` text NOT NULL,
+      \`oldPrice\` decimal(10,2),
+      \`newPrice\` decimal(10,2),
+      \`changePercent\` decimal(5,2),
+      \`isRead\` boolean NOT NULL DEFAULT false,
+      \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+      CONSTRAINT \`notifications_id\` PRIMARY KEY(\`id\`)
+    )`);
+    await conn.execute(`CREATE TABLE IF NOT EXISTS \`price_history\` (
+      \`id\` int AUTO_INCREMENT NOT NULL,
+      \`productId\` int NOT NULL,
+      \`price\` decimal(10,2) NOT NULL,
+      \`originalPrice\` decimal(10,2),
+      \`isOnSale\` boolean NOT NULL DEFAULT false,
+      \`discountPercent\` decimal(5,2),
+      \`crawledAt\` timestamp NOT NULL DEFAULT (now()),
+      CONSTRAINT \`price_history_id\` PRIMARY KEY(\`id\`)
+    )`);
+    await conn.execute(`CREATE TABLE IF NOT EXISTS \`products\` (
+      \`id\` int AUTO_INCREMENT NOT NULL,
+      \`name\` varchar(500) NOT NULL,
+      \`brand\` varchar(200),
+      \`sku\` varchar(100),
+      \`url\` text NOT NULL,
+      \`imageUrl\` text,
+      \`category\` enum('beauty_skincare','adult_health','childrens_health','vegan_health','natural_soap','other') NOT NULL DEFAULT 'other',
+      \`currentPrice\` decimal(10,2),
+      \`originalPrice\` decimal(10,2),
+      \`isOnSale\` boolean NOT NULL DEFAULT false,
+      \`discountPercent\` decimal(5,2),
+      \`isActive\` boolean NOT NULL DEFAULT true,
+      \`lastCrawledAt\` timestamp NULL,
+      \`createdAt\` timestamp NOT NULL DEFAULT (now()),
+      \`updatedAt\` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+      CONSTRAINT \`products_id\` PRIMARY KEY(\`id\`)
+    )`);
+    // Insert default password if not exists
+    await conn.execute(
+      `INSERT IGNORE INTO \`crawler_settings\` (\`key\`, \`value\`, \`description\`) VALUES ('access_password', 'CW150721', 'System access password')`
+    );
+    await conn.end();
+    _migrated = true;
+    console.log("[Database] Migrations completed successfully");
+  } catch (error) {
+    console.error("[Database] Migration failed:", error);
+  }
+}
 
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
+      await runMigrations(process.env.DATABASE_URL);
       _db = drizzle(process.env.DATABASE_URL);
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
