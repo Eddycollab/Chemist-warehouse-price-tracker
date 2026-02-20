@@ -77,6 +77,21 @@ export default function CrawlerManager() {
     onError: () => toast.error("啟動爬蟲失敗"),
   });
 
+  const resetStuck = trpc.crawl.resetStuck.useMutation({
+    onSuccess: (data) => {
+      toast.success(data.message);
+      setTimeout(() => {
+        refetchJobs();
+        refetchRunning();
+        utils.crawl.latestJob.invalidate();
+      }, 500);
+    },
+    onError: () => toast.error("重置失敗"),
+  });
+
+  // Detect if there are stuck running jobs in DB but no actual running process
+  const hasStuckJobs = !isCrawling && jobs?.some((j) => j.status === "running");
+
   const stopCrawl = trpc.crawl.stop.useMutation({
     onSuccess: (data) => {
       if (data.success) {
@@ -105,6 +120,33 @@ export default function CrawlerManager() {
           手動觸發爬蟲任務或查看爬取歷史記錄
         </p>
       </div>
+
+      {/* Stuck Jobs Warning Banner */}
+      {hasStuckJobs && (
+        <div className="flex items-center justify-between rounded-lg border border-orange-500/30 bg-orange-500/10 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="h-5 w-5 text-orange-400" />
+            <div>
+              <p className="text-sm font-medium text-orange-300">偵測到卡住的任務</p>
+              <p className="text-xs text-orange-400/70">伺服器重啟後有任務狀態未更新，請點擊重置</p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2 border-orange-500/50 text-orange-400 hover:bg-orange-500/10 hover:text-orange-300"
+            disabled={resetStuck.isPending}
+            onClick={() => resetStuck.mutate()}
+          >
+            {resetStuck.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            重置狀態
+          </Button>
+        </div>
+      )}
 
       {/* Running Status Banner */}
       {isCrawling && (

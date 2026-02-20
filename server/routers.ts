@@ -20,6 +20,7 @@ import {
   getCrawlerSettings,
   updateCrawlerSetting,
   getAccessPassword,
+  resetStuckJobs,
 } from "./db";
 import { runCrawl, stopCrawl, isCrawlRunning } from "./crawler";
 import * as XLSX from "xlsx";
@@ -290,6 +291,11 @@ const crawlRouter = router({
       return { success: true, message: `已發送停止指令，爬蟲將在完成目前頁面後停止` };
     }
     return { success: false, message: "目前沒有正在執行的爬蟲任務" };
+  }),
+
+  resetStuck: publicProcedure.mutation(async () => {
+    const count = await resetStuckJobs();
+    return { success: true, message: count > 0 ? `已重置 ${count} 個卡住的任務` : "沒有需要重置的任務", count };
   }),
 });
 

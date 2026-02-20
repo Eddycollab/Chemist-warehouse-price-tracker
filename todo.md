@@ -70,3 +70,9 @@
 - [x] 後端：在 routers.ts 加入 crawl.stop tRPC mutation
 - [x] 前端：在 CrawlerManager.tsx 加入「停止爬取」按鈕（執行中才顯示）
 - [x] 前端：停止後更新任務狀態顯示
+
+## 修復爬蟲狀態卡住問題
+- [x] 後端 db.ts：加入 resetStuckJobs() 函式，將 running 狀態的任務改為 stopped
+- [x] 後端 server startup：啟動時自動呼叫 resetStuckJobs()（處理 Railway 重啟後殘留的 running 任務）
+- [x] 後端 routers.ts：加入 crawl.resetStuck mutation（手動重置）
+- [x] 前端 CrawlerManager.tsx：加入「重置卡住任務」按鈕（當有 running 任務但 isRunning=false 時顯示）

@@ -284,6 +284,21 @@ export async function getLatestPriceForProduct(productId: number) {
 
 // ─── Crawl Job Helpers ────────────────────────────────────────────────────────
 
+/** Reset any jobs stuck in 'running' state (e.g. after server restart). */
+export async function resetStuckJobs() {
+  const db = await getDb();
+  if (!db) return 0;
+  const result = await db
+    .update(crawlJobs)
+    .set({ status: "stopped", completedAt: new Date() })
+    .where(eq(crawlJobs.status, "running"));
+  const affected = (result as unknown as { affectedRows?: number }[])[0]?.affectedRows ?? 0;
+  if (affected > 0) {
+    console.log(`[Database] Reset ${affected} stuck running job(s) to stopped`);
+  }
+  return affected;
+}
+
 export async function createCrawlJob(data: InsertCrawlJob) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
