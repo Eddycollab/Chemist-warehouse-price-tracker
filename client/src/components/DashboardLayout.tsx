@@ -21,15 +21,19 @@ import {
 } from "@/components/ui/sidebar";
 import { getLoginUrl } from "@/const";
 import { useIsMobile } from "@/hooks/useMobile";
-import { LayoutDashboard, LogOut, PanelLeft, Users } from "lucide-react";
+import { LayoutDashboard, LogOut, PanelLeft, Package, Bell, Settings, Bot, TrendingDown } from "lucide-react";
+import { trpc } from "@/lib/trpc";
 import { CSSProperties, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { Button } from "./ui/button";
 
 const menuItems = [
-  { icon: LayoutDashboard, label: "Page 1", path: "/" },
-  { icon: Users, label: "Page 2", path: "/some-path" },
+  { icon: LayoutDashboard, label: "儀表板", path: "/" },
+  { icon: Package, label: "產品列表", path: "/products" },
+  { icon: Bot, label: "爬蟲管理", path: "/crawler" },
+  { icon: Bell, label: "通知中心", path: "/notifications" },
+  { icon: Settings, label: "系統設定", path: "/settings" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
@@ -113,6 +117,9 @@ function DashboardLayoutContent({
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const activeMenuItem = menuItems.find(item => item.path === location);
+  const { data: unreadData } = trpc.notification.unreadCount.useQuery(undefined, {
+    refetchInterval: 30000,
+  });
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -159,7 +166,7 @@ function DashboardLayoutContent({
           className="border-r-0"
           disableTransition={isResizing}
         >
-          <SidebarHeader className="h-16 justify-center">
+          <SidebarHeader className="h-16 justify-center border-b border-border">
             <div className="flex items-center gap-3 px-2 transition-all w-full">
               <button
                 onClick={toggleSidebar}
@@ -170,8 +177,9 @@ function DashboardLayoutContent({
               </button>
               {!isCollapsed ? (
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-semibold tracking-tight truncate">
-                    Navigation
+                  <TrendingDown className="h-5 w-5 text-primary shrink-0" />
+                  <span className="font-bold tracking-tight truncate text-primary">
+                    CW 價格追蹤
                   </span>
                 </div>
               ) : null}
