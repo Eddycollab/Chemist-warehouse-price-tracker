@@ -2,13 +2,10 @@
 nixPkgs = ["nodejs_22"]
 
 [phases.install]
-cmds = [
-  "npm install -g pnpm@10.4.1",
-  "pnpm install --frozen-lockfile"
-]
+cmds = ["npm install --legacy-peer-deps"]
 
 [phases.build]
-cmds = ["pnpm run build"]
+cmds = ["npm run build"]
 
 [start]
 cmd = "node dist/index.js"
