@@ -1,4 +1,5 @@
 import { useState } from "react";
+import ExcelImportDialog from "@/components/ExcelImportDialog";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ import {
   Tag,
   Package,
   Loader2,
+  FileSpreadsheet,
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
@@ -157,6 +159,7 @@ export default function Products() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
   const [showSaleOnly, setShowSaleOnly] = useState(false);
+  const [showExcelImport, setShowExcelImport] = useState(false);
 
   const { data: products, isLoading, refetch } = trpc.product.list.useQuery({
     category: category !== "all" ? (category as "beauty_skincare" | "adult_health" | "childrens_health" | "vegan_health" | "natural_soap" | "other") : undefined,
@@ -187,7 +190,23 @@ export default function Products() {
             管理所有追蹤中的 Chemist Warehouse 產品
           </p>
         </div>
-        <AddProductDialog onSuccess={refetch} />
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowExcelImport(true)}
+            className="gap-2 border-border"
+          >
+            <FileSpreadsheet className="h-4 w-4" />
+            Excel 匯入
+          </Button>
+          <AddProductDialog onSuccess={refetch} />
+        </div>
+        <ExcelImportDialog
+          open={showExcelImport}
+          onOpenChange={setShowExcelImport}
+          onSuccess={refetch}
+        />
       </div>
 
       {/* Filters */}

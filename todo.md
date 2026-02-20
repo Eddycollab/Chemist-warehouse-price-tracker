@@ -54,3 +54,12 @@
 - [x] 前端：建立密碼登入頁面（Nord 深色主題，CW Logo 風格）
 - [x] 前端：在 App.tsx 包裝密碼保護邏輯
 - [x] 系統設定：加入密碼修改功能（輸入新密碼並確認）與登出按鈕
+
+## 密碼修改 + Excel 匯入 + Railway 部署指南
+- [x] 修改資料庫預設密碼為 CW150721
+- [x] 修改後端 fallback 密碼為 CW150721
+- [x] 安裝 xlsx 套件（解析 Excel 檔案）
+- [x] 後端：建立 product.importFromExcel tRPC 路由
+- [x] 前端：建立 Excel 匯入 UI（拖曳上傳、欄位預覽、確認匯入）
+- [x] 提供 Excel 範本下載功能
+- [x] 撰寫完整 Railway 部署指南（RAILWAY_DEPLOY.md）

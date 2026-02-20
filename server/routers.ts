@@ -22,6 +22,7 @@ import {
   getAccessPassword,
 } from "./db";
 import { runCrawl } from "./crawler";
+import * as XLSX from "xlsx";
 import { getSchedulerStatus } from "./scheduler";
 import { PRODUCT_CATEGORIES } from "../drizzle/schema";
 
@@ -103,6 +104,130 @@ const productRouter = router({
       await deleteProduct(input.id);
       return { success: true };
     }),
+
+  importFromExcel: publicProcedure
+    .input(
+      z.object({
+        // base64-encoded xlsx file content
+        fileBase64: z.string(),
+        fileName: z.string(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      // Decode base64 to buffer
+      const buffer = Buffer.from(input.fileBase64, "base64");
+      const workbook = XLSX.read(buffer, { type: "buffer" });
+      const sheetName = workbook.SheetNames[0];
+      if (!sheetName) throw new Error("Excel 檔案為空，請檢查格式");
+      const sheet = workbook.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+
+      if (rows.length === 0) throw new Error("資料為空，請檢查 Excel 內容");
+
+      const validCategories = new Set(PRODUCT_CATEGORIES);
+      const results: { success: number; failed: number; errors: string[] } = {
+        success: 0,
+        failed: 0,
+        errors: [],
+      };
+
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i]!;
+        const rowNum = i + 2; // Excel row number (1-indexed + header)
+
+        // Flexible column name matching (support Chinese and English headers)
+        const name = String(
+          row["name"] ?? row["\u5546\u54c1\u540d\u7a31"] ?? row["\u540d\u7a31"] ?? ""
+        ).trim();
+        const url = String(
+          row["url"] ?? row["URL"] ?? row["\u5546\u54c1\u9023\u7d50"] ?? row["\u9023\u7d50"] ?? ""
+        ).trim();
+        const brand = String(
+          row["brand"] ?? row["\u54c1\u724c"] ?? ""
+        ).trim();
+        const categoryRaw = String(
+          row["category"] ?? row["\u54c1\u985e"] ?? row["\u5206\u985e"] ?? ""
+        ).trim();
+        const sku = String(
+          row["sku"] ?? row["SKU"] ?? ""
+        ).trim();
+
+        if (!name) {
+          results.errors.push(`\u7b2c ${rowNum} \u884c\uff1a\u5546\u54c1\u540d\u7a31\u4e0d\u80fd\u70ba\u7a7a`);
+          results.failed++;
+          continue;
+        }
+        if (!url || !url.startsWith("http")) {
+          results.errors.push(`\u7b2c ${rowNum} \u884c (${name})\uff1aURL \u683c\u5f0f\u4e0d\u6b63\u78ba`);
+          results.failed++;
+          continue;
+        }
+
+        // Map category
+        let category: typeof PRODUCT_CATEGORIES[number] = "beauty_skincare";
+        const catMap: Record<string, typeof PRODUCT_CATEGORIES[number]> = {
+          beauty: "beauty_skincare",
+          beauty_skincare: "beauty_skincare",
+          "\u7f8e\u599a\u8b77\u819a": "beauty_skincare",
+          "\u7f8e\u5bb9": "beauty_skincare",
+          adult_health: "adult_health",
+          "\u6210\u4eba\u4fdd\u5065": "adult_health",
+          children_health: "childrens_health",
+          childrens_health: "childrens_health",
+          "\u5152\u7ae5\u4fdd\u5065": "childrens_health",
+          vegan_health: "vegan_health",
+          "\u7d14\u7d20\u4fdd\u5065": "vegan_health",
+          natural_soap: "natural_soap",
+          "\u5929\u7136\u9999\u7682": "natural_soap",
+          other: "other",
+          "\u5176\u4ed6": "other",
+        };
+        if (categoryRaw && catMap[categoryRaw.toLowerCase()]) {
+          category = catMap[categoryRaw.toLowerCase()]!;
+        } else if (validCategories.has(categoryRaw as typeof PRODUCT_CATEGORIES[number])) {
+          category = categoryRaw as typeof PRODUCT_CATEGORIES[number];
+        }
+
+        try {
+          await createProduct({
+            name,
+            brand: brand || undefined,
+            url,
+            category,
+            sku: sku || undefined,
+            isActive: true,
+            isOnSale: false,
+          });
+          results.success++;
+        } catch (err) {
+          results.errors.push(`\u7b2c ${rowNum} \u884c (${name})\uff1a${err instanceof Error ? err.message : "\u672a\u77e5\u932f\u8aa4"}`);
+          results.failed++;
+        }
+      }
+
+      return results;
+    }),
+
+  downloadTemplate: publicProcedure.query(() => {
+    // Return template column definitions for frontend to generate
+    return {
+      headers: [
+        { key: "name", label: "\u5546\u54c1\u540d\u7a31", required: true, example: "Swisse Ultiboost Vitamin C 1000mg 120\u9821" },
+        { key: "url", label: "\u5546\u54c1\u9023\u7d50", required: true, example: "https://www.chemistwarehouse.com.au/buy/..." },
+        { key: "brand", label: "\u54c1\u724c", required: false, example: "Swisse" },
+        { key: "category", label: "\u54c1\u985e", required: false, example: "adult_health" },
+        { key: "sku", label: "SKU", required: false, example: "SW001" },
+      ],
+      categories: PRODUCT_CATEGORIES,
+      categoryLabels: {
+        beauty: "\u7f8e\u599a\u8b77\u819a",
+        adult_health: "\u6210\u4eba\u4fdd\u5065",
+        children_health: "\u5152\u7ae5\u4fdd\u5065",
+        vegan_health: "\u7d14\u7d20\u4fdd\u5065",
+        natural_soap: "\u5929\u7136\u9999\u7682",
+      },
+    };
+  }),
 });
 
 // ─── Price History Router ─────────────────────────────────────────────────────

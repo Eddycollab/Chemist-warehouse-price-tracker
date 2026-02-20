@@ -284,5 +284,5 @@ export async function getAccessPassword(): Promise<string> {
     .from(crawlerSettings)
     .where(eq(crawlerSettings.key, "access_password"))
     .limit(1);
-  return result[0]?.value ?? "cw2024";
+  return result[0]?.value ?? "CW150721";
 }
