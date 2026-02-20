@@ -40,3 +40,9 @@
 - [x] 撰寫爬蟲邏輯單元測試（10 tests passed）
 - [x] 撰寫 tRPC 路由測試（product, notification, crawl, settings）
 - [x] 原有 auth.logout 測試通過
+
+## 移除登入限制（固定網址直接訪問）
+- [x] 移除 DashboardLayout 的登入牆（不再要求 Manus OAuth）
+- [x] 移除側邊欄底部的用戶資訊顯示，改為通知未讀數量 Badge
+- [x] 確保所有 tRPC 路由改為 publicProcedure（不需要 protectedProcedure）
+- [x] 測試所有頁面無需登入即可訪問（10 tests passed）
