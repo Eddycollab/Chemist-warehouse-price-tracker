@@ -1,8 +1,8 @@
 /**
  * Chemist Warehouse Price Crawler
  *
- * Uses Playwright (headless Chromium) to bypass Cloudflare protection
- * and automatically discover products from category pages.
+ * Uses playwright-extra + stealth plugin to bypass Cloudflare/bot detection.
+ * Features: stealth mode, random delays, cookie persistence, random viewport.
  */
 
 import {
@@ -17,6 +17,8 @@ import {
 } from "./db";
 import { notifyOwner } from "./_core/notification";
 import type { Product } from "../drizzle/schema";
+import path from "path";
+import fs from "fs";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,7 +36,9 @@ export interface CrawledProductData {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const CRAWL_DELAY_MS = 1500;
+const CRAWL_DELAY_MIN_MS = 1500;
+const CRAWL_DELAY_MAX_MS = 4000;
+const COOKIE_STORE_PATH = path.join(process.cwd(), ".crawl-cookies.json");
 
 // ─── Crawl Stop Control ───────────────────────────────────────────────────────
 
@@ -86,7 +90,9 @@ const CATEGORY_URLS: Record<string, { id: number; slug: string; label: string }[
 
 // ─── Utility Functions ────────────────────────────────────────────────────────
 
-function sleep(ms: number): Promise<void> {
+/** Random delay between min and max ms to mimic human browsing */
+function sleep(min = CRAWL_DELAY_MIN_MS, max = CRAWL_DELAY_MAX_MS): Promise<void> {
+  const ms = Math.floor(Math.random() * (max - min + 1)) + min;
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -107,7 +113,54 @@ function extractSkuFromUrl(url: string): string | undefined {
   return match ? match[1] : undefined;
 }
 
-// ─── Playwright Browser Manager ───────────────────────────────────────────────
+/** Random viewport size to avoid fingerprinting */
+function randomViewport() {
+  const viewports = [
+    { width: 1280, height: 800 },
+    { width: 1366, height: 768 },
+    { width: 1440, height: 900 },
+    { width: 1920, height: 1080 },
+    { width: 1536, height: 864 },
+  ];
+  return viewports[Math.floor(Math.random() * viewports.length)];
+}
+
+/** Realistic user agents pool */
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+];
+
+function randomUserAgent() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
+// ─── Cookie Persistence ───────────────────────────────────────────────────────
+
+function loadCookies(): object[] {
+  try {
+    if (fs.existsSync(COOKIE_STORE_PATH)) {
+      const data = fs.readFileSync(COOKIE_STORE_PATH, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+function saveCookies(cookies: object[]): void {
+  try {
+    fs.writeFileSync(COOKIE_STORE_PATH, JSON.stringify(cookies, null, 2));
+  } catch {
+    // ignore
+  }
+}
+
+// ─── Playwright Stealth Browser Manager ──────────────────────────────────────
 
 let browserInstance: import("playwright").Browser | null = null;
 
@@ -115,8 +168,13 @@ async function getBrowser(): Promise<import("playwright").Browser> {
   if (browserInstance && browserInstance.isConnected()) {
     return browserInstance;
   }
-  const { chromium } = await import("playwright");
-  browserInstance = await chromium.launch({
+
+  // Use playwright-extra with stealth plugin
+  const { chromium: playwrightChromium } = await import("playwright-extra");
+  const StealthPlugin = (await import("puppeteer-extra-plugin-stealth")).default;
+  playwrightChromium.use(StealthPlugin());
+
+  browserInstance = await playwrightChromium.launch({
     headless: true,
     args: [
       "--no-sandbox",
@@ -127,6 +185,9 @@ async function getBrowser(): Promise<import("playwright").Browser> {
       "--no-zygote",
       "--single-process",
       "--disable-gpu",
+      "--disable-blink-features=AutomationControlled",
+      "--disable-features=IsolateOrigins,site-per-process",
+      "--lang=en-AU",
     ],
   });
   return browserInstance;
@@ -150,13 +211,36 @@ async function scrapeCategoryPage(
   maxPages = 3
 ): Promise<CrawledProductData[]> {
   const browser = await getBrowser();
+  const savedCookies = loadCookies();
+
   const context = await browser.newContext({
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    userAgent: randomUserAgent(),
     locale: "en-AU",
     timezoneId: "Australia/Sydney",
-    viewport: { width: 1280, height: 800 },
+    viewport: randomViewport(),
+    extraHTTPHeaders: {
+      "Accept-Language": "en-AU,en;q=0.9",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Cache-Control": "no-cache",
+      "Pragma": "no-cache",
+      "Sec-Fetch-Dest": "document",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-User": "?1",
+      "Upgrade-Insecure-Requests": "1",
+    },
   });
+
+  // Restore saved cookies if available
+  if (savedCookies.length > 0) {
+    try {
+      await context.addCookies(savedCookies as Parameters<typeof context.addCookies>[0]);
+      console.log(`[Crawler] Restored ${savedCookies.length} cookies`);
+    } catch {
+      // ignore invalid cookies
+    }
+  }
 
   const discoveredProducts: CrawledProductData[] = [];
 
@@ -165,9 +249,29 @@ async function scrapeCategoryPage(
       const url = `https://www.chemistwarehouse.com.au/shop-online/${categoryId}/${slug}?pageNumber=${page}`;
       const pageObj = await context.newPage();
 
+      // Simulate human-like behavior: random mouse movements
+      await pageObj.addInitScript(() => {
+        // Override navigator properties to hide automation
+        Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+        Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
+        Object.defineProperty(navigator, "languages", { get: () => ["en-AU", "en"] });
+        // @ts-ignore
+        window.chrome = { runtime: {} };
+      });
+
       try {
         console.log(`[Crawler] Scraping category page: ${url}`);
         await pageObj.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+
+        // Simulate human scrolling
+        await pageObj.evaluate(() => {
+          window.scrollTo({ top: 300, behavior: "smooth" });
+        });
+        await sleep(500, 1200);
+        await pageObj.evaluate(() => {
+          window.scrollTo({ top: 600, behavior: "smooth" });
+        });
+        await sleep(300, 800);
 
         // Wait for product cards to appear
         await pageObj.waitForSelector('[data-testid="product-card"], .product-card, article', {
@@ -272,6 +376,12 @@ async function scrapeCategoryPage(
 
         console.log(`[Crawler] Found ${products.length} products on page ${page}`);
 
+        // Save cookies after successful page load
+        const cookies = await context.cookies();
+        if (cookies.length > 0) {
+          saveCookies(cookies);
+        }
+
         // Check if there are more pages
         const hasNextPage = await pageObj.evaluate(() => {
           const nextBtn = document.querySelector('[aria-label="Next page"], [class*="next"], a[rel="next"]');
@@ -281,7 +391,9 @@ async function scrapeCategoryPage(
         await pageObj.close();
 
         if (!hasNextPage || products.length === 0) break;
-        await sleep(CRAWL_DELAY_MS);
+
+        // Random delay between pages
+        await sleep();
       } catch (err) {
         console.error(`[Crawler] Error on category page ${url}:`, err);
         await pageObj.close().catch(() => {});
@@ -478,7 +590,8 @@ export async function runCrawl(options: {
               }
             }
 
-            await sleep(CRAWL_DELAY_MS);
+            // Random delay between categories
+            await sleep();
           } catch (err) {
             console.error(`[Crawler] Error scraping category ${catInfo.label}:`, err);
             failedCount++;
@@ -502,9 +615,6 @@ export async function runCrawl(options: {
     if (productsToUpdate.length > 0 && !shouldDiscover) {
       console.log(`[Crawler] Phase 2: Updating ${productsToUpdate.length} existing products`);
       await updateCrawlJob(jobId, { totalProducts: productsToUpdate.length });
-
-      // For products not covered by category scraping, we already updated them above
-      // This phase handles any remaining products that weren't found in category pages
     }
 
   } catch (error) {

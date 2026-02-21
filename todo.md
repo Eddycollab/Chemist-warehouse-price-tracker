@@ -76,3 +76,11 @@
 - [x] 後端 server startup：啟動時自動呼叫 resetStuckJobs()（處理 Railway 重啟後殘留的 running 任務）
 - [x] 後端 routers.ts：加入 crawl.resetStuck mutation（手動重置）
 - [x] 前端 CrawlerManager.tsx：加入「重置卡住任務」按鈕（當有 running 任務但 isRunning=false 時顯示）
+
+## 爬蟲反偵測強化
+- [x] 安裝 playwright-extra + puppeteer-extra-plugin-stealth
+- [x] 改用 stealth chromium 啟動
+- [x] 加入隨機延遲（1-4 秒）
+- [x] Cookie 持久化（保存 session）
+- [x] 加入更多反偵測措施（隨機 viewport、滑鼠移動模擬）
+- [x] 更新 nixpacks.toml 確保 Railway 部署包含新依賴
