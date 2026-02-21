@@ -40,10 +40,27 @@ const CRAWL_DELAY_MIN_MS = 1500;
 const CRAWL_DELAY_MAX_MS = 4000;
 const COOKIE_STORE_PATH = path.join(process.cwd(), ".crawl-cookies.json");
 
-// ─── Crawl Stop Control ───────────────────────────────────────────────────────
+// ─── Crawl Stop Control & Progress ──────────────────────────────────────────
 
 let _crawlStopped = false;
 let _currentJobId: number | null = null;
+
+// Progress tracking
+interface CrawlProgress {
+  currentCategory: string | null;
+  currentCategoryLabel: string | null;
+  completedCategories: number;
+  totalCategories: number;
+  isTestMode: boolean;
+}
+
+let _crawlProgress: CrawlProgress = {
+  currentCategory: null,
+  currentCategoryLabel: null,
+  completedCategories: 0,
+  totalCategories: 0,
+  isTestMode: false,
+};
 
 /** Request the running crawl job to stop gracefully. */
 export function stopCrawl(): { stopped: boolean; jobId: number | null } {
@@ -58,6 +75,11 @@ export function stopCrawl(): { stopped: boolean; jobId: number | null } {
 /** Returns true if a crawl is currently running. */
 export function isCrawlRunning(): boolean {
   return _currentJobId !== null;
+}
+
+/** Returns current crawl progress. */
+export function getCrawlProgress(): CrawlProgress & { running: boolean } {
+  return { ..._crawlProgress, running: _currentJobId !== null };
 }
 
 // Category URL mappings for Chemist Warehouse
@@ -480,6 +502,7 @@ export async function runCrawl(options: {
   jobType?: "scheduled" | "manual";
   productIds?: number[];
   discoverNew?: boolean;
+  testMode?: boolean;
 }): Promise<{ jobId: number; success: boolean; message: string }> {
   console.log("[Crawler] Starting crawl job...", options);
 
@@ -499,17 +522,37 @@ export async function runCrawl(options: {
   });
 
   const jobId = (jobResult as { insertId?: number })?.insertId || 0;
-
   // Register this job as the active job and reset stop flag
   _currentJobId = jobId;
   _crawlStopped = false;
+
+  const isTestMode = options.testMode === true;
+
+  // Determine target categories for progress tracking
+  const targetCategoriesForProgress = options.category && options.category !== "all"
+    ? [options.category]
+    : Object.keys(CATEGORY_URLS);
+
+  // Count total sub-categories
+  const totalSubCats = isTestMode ? 1 : targetCategoriesForProgress.reduce(
+    (sum, cat) => sum + (CATEGORY_URLS[cat]?.length || 0), 0
+  );
+
+  // Initialize progress
+  _crawlProgress = {
+    currentCategory: null,
+    currentCategoryLabel: null,
+    completedCategories: 0,
+    totalCategories: totalSubCats,
+    isTestMode,
+  };
 
   let crawledCount = 0;
   let failedCount = 0;
   let newProductsCount = 0;
 
   try {
-    // ── Phase 1: Discover new products from category pages ────────────────────
+    // ── Phase 1: Discover new products from category pages ────────────────────────
     const shouldDiscover = options.discoverNew !== false; // default true
     const targetCategories = options.category && options.category !== "all"
       ? [options.category]
@@ -522,19 +565,33 @@ export async function runCrawl(options: {
       const existingProducts = await getAllProducts({ isActive: true });
       const existingUrls = new Set(existingProducts.map((p) => p.url.toLowerCase()));
 
+      let subCatsDone = 0;
+
+      outerLoop:
       for (const cat of targetCategories) {
         if (_crawlStopped) {
           console.log("[Crawler] Stop flag detected, aborting category loop");
           break;
         }
         const categoryUrls = CATEGORY_URLS[cat] || [];
+
         for (const catInfo of categoryUrls) {
           if (_crawlStopped) {
             console.log("[Crawler] Stop flag detected, aborting sub-category loop");
             break;
           }
+
+          // Update progress
+          _crawlProgress.currentCategory = cat;
+          _crawlProgress.currentCategoryLabel = catInfo.label;
+          _crawlProgress.completedCategories = subCatsDone;
+
           try {
-            const discovered = await scrapeCategoryPage(catInfo.id, catInfo.slug, 2);
+            // testMode: only 1 page, only first sub-category
+            const maxPages = isTestMode ? 1 : 2;
+            const discovered = await scrapeCategoryPage(catInfo.id, catInfo.slug, maxPages);
+            subCatsDone++;
+            _crawlProgress.completedCategories = subCatsDone;
             console.log(`[Crawler] Discovered ${discovered.length} products in ${catInfo.label}`);
 
             for (const product of discovered) {
@@ -594,9 +651,14 @@ export async function runCrawl(options: {
 
             // Random delay between categories
             await sleep();
+
+            // testMode: stop after first sub-category
+            if (isTestMode) break outerLoop;
           } catch (err) {
             console.error(`[Crawler] Error scraping category ${catInfo.label}:`, err);
             failedCount++;
+            // testMode: stop even on error
+            if (isTestMode) break outerLoop;
           }
         }
       }
@@ -626,6 +688,13 @@ export async function runCrawl(options: {
     await closeBrowser();
     _currentJobId = null;
     _crawlStopped = false;
+    _crawlProgress = {
+      currentCategory: null,
+      currentCategoryLabel: null,
+      completedCategories: 0,
+      totalCategories: 0,
+      isTestMode: false,
+    };
   }
 
   const wasStopped = _crawlStopped;

@@ -58,16 +58,17 @@ export default function CrawlerManager() {
   const { data: runningStatus, refetch: refetchRunning } = trpc.crawl.isRunning.useQuery(undefined, {
     refetchInterval: 3000,
   });
+  const { data: crawlProgress } = trpc.crawl.progress.useQuery(undefined, {
+    refetchInterval: 2000,
+    enabled: runningStatus?.running ?? false,
+  });
   const utils = trpc.useUtils();
 
   const isCrawling = runningStatus?.running ?? false;
 
   const triggerCrawl = trpc.crawl.trigger.useMutation({
-    onSuccess: (_, vars) => {
-      const catLabel = vars?.category
-        ? (CATEGORY_LABELS[vars.category] ?? vars.category)
-        : "全部品類";
-      toast.success(`已啟動爬蟲任務（${catLabel}）！`);
+    onSuccess: (data, vars) => {
+      toast.success(data.message);
       setTimeout(() => {
         refetchJobs();
         refetchRunning();
@@ -150,28 +151,52 @@ export default function CrawlerManager() {
 
       {/* Running Status Banner */}
       {isCrawling && (
-        <div className="flex items-center justify-between rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3">
-          <div className="flex items-center gap-3">
-            <Loader2 className="h-5 w-5 text-yellow-400 animate-spin" />
-            <div>
-              <p className="text-sm font-medium text-yellow-300">爬蟲任務執行中</p>
-              <p className="text-xs text-yellow-400/70">正在掃描 Chemist Warehouse 商品頁面，請稍候...</p>
+        <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Loader2 className="h-5 w-5 text-yellow-400 animate-spin flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-yellow-300">
+                  {crawlProgress?.isTestMode ? "測試模式執行中" : "爬蟲任務執行中"}
+                </p>
+                <p className="text-xs text-yellow-400/70">
+                  {crawlProgress?.currentCategoryLabel
+                    ? `目前品類：${crawlProgress.currentCategoryLabel}`
+                    : "正在準備爬取..."
+                  }
+                </p>
+              </div>
             </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2 border-red-500/50 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+              disabled={stopCrawl.isPending}
+              onClick={() => stopCrawl.mutate()}
+            >
+              {stopCrawl.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Square className="h-3.5 w-3.5 fill-current" />
+              )}
+              停止爬取
+            </Button>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-2 border-red-500/50 text-red-400 hover:bg-red-500/10 hover:text-red-300"
-            disabled={stopCrawl.isPending}
-            onClick={() => stopCrawl.mutate()}
-          >
-            {stopCrawl.isPending ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Square className="h-3.5 w-3.5 fill-current" />
-            )}
-            停止爬取
-          </Button>
+          {/* Progress bar */}
+          {crawlProgress && crawlProgress.totalCategories > 0 && (
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs text-yellow-400/70">
+                <span>進度</span>
+                <span>{crawlProgress.completedCategories} / {crawlProgress.totalCategories} 個品類</span>
+              </div>
+              <div className="w-full bg-yellow-900/30 rounded-full h-1.5">
+                <div
+                  className="bg-yellow-400 h-1.5 rounded-full transition-all duration-500"
+                  style={{ width: `${Math.round((crawlProgress.completedCategories / crawlProgress.totalCategories) * 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -214,6 +239,31 @@ export default function CrawlerManager() {
           <p className="text-sm text-muted-foreground mb-4">
             選擇要爬取的品類，或一次爬取所有追蹤中的產品。爬蟲任務在背景執行，請稍後查看結果。
           </p>
+
+          {/* Test Mode */}
+          <div className="mb-4 p-3 rounded-lg border border-blue-500/20 bg-blue-500/5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-blue-300">✨ 測試模式</p>
+                <p className="text-xs text-blue-400/70 mt-0.5">只爬取第一個品類第 1 頁（約 20 個產品），快速驗證爬蟲是否正常運作</p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 border-blue-500/50 text-blue-400 hover:bg-blue-500/10 hover:text-blue-300 ml-4"
+                disabled={triggerCrawl.isPending || isCrawling}
+                onClick={() => triggerCrawl.mutate({ testMode: true })}
+              >
+                {triggerCrawl.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Play className="h-3.5 w-3.5" />
+                )}
+                啟動測試
+              </Button>
+            </div>
+          </div>
+
           <div className="flex flex-wrap gap-2">
             {CRAWL_CATEGORIES.map((cat) => (
               <Button

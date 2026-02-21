@@ -22,7 +22,7 @@ import {
   getAccessPassword,
   resetStuckJobs,
 } from "./db";
-import { runCrawl, stopCrawl, isCrawlRunning } from "./crawler";
+import { runCrawl, stopCrawl, isCrawlRunning, getCrawlProgress } from "./crawler";
 import * as XLSX from "xlsx";
 import { getSchedulerStatus } from "./scheduler";
 import { PRODUCT_CATEGORIES } from "../drizzle/schema";
@@ -264,6 +264,7 @@ const crawlRouter = router({
       z.object({
         category: z.string().optional(),
         productIds: z.array(z.number()).optional(),
+        testMode: z.boolean().optional(),
       }).optional()
     )
     .mutation(async ({ input }) => {
@@ -272,10 +273,18 @@ const crawlRouter = router({
         category: input?.category,
         jobType: "manual",
         productIds: input?.productIds,
+        testMode: input?.testMode,
       }).catch((err) => console.error("[CrawlRouter] Background crawl error:", err));
 
-      return { success: true, message: "爬蟲任務已啟動，請稍後查看結果" };
+      const msg = input?.testMode
+        ? "測試模式已啟動，將爬取第一個品類第 1 頁"
+        : "爬蟲任務已啟動，請稍後查看結果";
+      return { success: true, message: msg };
     }),
+
+  progress: publicProcedure.query(() => {
+    return getCrawlProgress();
+  }),
 
   schedulerStatus: publicProcedure.query(() => {
     return getSchedulerStatus();

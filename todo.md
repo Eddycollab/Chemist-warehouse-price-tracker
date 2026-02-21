@@ -90,3 +90,11 @@
 - [x] 修正產品卡片選擇器
 - [x] 修正價格選擇器
 - [x] 修正 browserContext 關閉錯誤（每個品類使用獨立 context）
+
+## 測試模式按鈕 + 爬蟲進度顯示
+- [x] 後端 crawler.ts：加入 testMode 參數（只爬第 1 頁，最多 1 個品類）
+- [x] 後端 crawler.ts：加入全域進度狀態（currentCategory, completedCategories, totalCategories）
+- [x] 後端 routers.ts：加入 crawl.progress query（回傳進度資訊）
+- [x] 後端 routers.ts：crawl.start 接受 testMode 參數
+- [x] 前端 CrawlerManager.tsx：加入「測試爬蟲」按鈕（選擇品類後可選測試模式）
+- [x] 前端 CrawlerManager.tsx：執行中橫幅顯示目前品類和完成百分比
