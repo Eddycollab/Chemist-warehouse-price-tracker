@@ -259,98 +259,100 @@ async function scrapeCategoryPage(
         window.chrome = { runtime: {} };
       });
 
-      try {
-        console.log(`[Crawler] Scraping category page: ${url}`);
-        await pageObj.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        try {
+          console.log(`[Crawler] Scraping category page: ${url}`);
+          await pageObj.goto(url, { waitUntil: "networkidle", timeout: 45000 });
 
-        // Simulate human scrolling
-        await pageObj.evaluate(() => {
-          window.scrollTo({ top: 300, behavior: "smooth" });
-        });
-        await sleep(500, 1200);
-        await pageObj.evaluate(() => {
-          window.scrollTo({ top: 600, behavior: "smooth" });
-        });
-        await sleep(300, 800);
+          // Accept cookie banner if present
+          await pageObj.click('#onetrust-accept-btn-handler').catch(() => {});
+          await sleep(500, 1000);
 
-        // Wait for product cards to appear
-        await pageObj.waitForSelector('[data-testid="product-card"], .product-card, article', {
-          timeout: 15000,
-        }).catch(() => {});
+          // Wait for product list items to appear (CW uses <li> cards)
+          await pageObj.waitForSelector('li a[href*="/buy/"]', {
+            timeout: 20000,
+          }).catch(() => {});
 
-        // Extract products from the page
-        const products = await pageObj.evaluate(() => {
-          const results: Array<{
-            name: string;
-            url: string;
-            price: string;
-            originalPrice: string;
-            imageUrl: string;
-            brand: string;
-          }> = [];
-
-          // Find all product links
-          const productLinks = document.querySelectorAll('a[href*="/buy/"]');
-          const seen = new Set<string>();
-
-          productLinks.forEach((link) => {
-            const href = (link as HTMLAnchorElement).href;
-            if (!href || seen.has(href)) return;
-            seen.add(href);
-
-            // Get the product card container
-            const card = link.closest("article") || link.closest("[class*='product']") || link.parentElement?.parentElement;
-
-            // Get product name
-            let name = "";
-            const nameEl = card?.querySelector("p, h2, h3, [class*='title'], [class*='name']");
-            if (nameEl) {
-              name = nameEl.textContent?.trim() || "";
-            }
-            if (!name) {
-              name = link.textContent?.trim() || "";
-            }
-
-            // Get price - look for $ signs in nearby elements
-            let price = "";
-            let originalPrice = "";
-            const priceEls = card?.querySelectorAll("[class*='price'], [class*='Price']");
-            if (priceEls) {
-              priceEls.forEach((el) => {
-                const text = el.textContent?.trim() || "";
-                if (text.includes("$")) {
-                  if (!price) price = text;
-                  else if (!originalPrice && text !== price) originalPrice = text;
-                }
-              });
-            }
-
-            // Fallback: search for $ in text nodes
-            if (!price) {
-              const allText = card?.textContent || "";
-              const priceMatch = allText.match(/\$\s*([\d,]+\.?\d*)/);
-              if (priceMatch) price = priceMatch[0];
-            }
-
-            // Get image
-            let imageUrl = "";
-            const img = card?.querySelector("img");
-            if (img) {
-              imageUrl = img.src || img.getAttribute("data-src") || "";
-            }
-
-            // Get brand
-            let brand = "";
-            const brandEl = card?.querySelector("[class*='brand'], [class*='Brand']");
-            if (brandEl) brand = brandEl.textContent?.trim() || "";
-
-            if (name && href) {
-              results.push({ name, url: href, price, originalPrice, imageUrl, brand });
-            }
+          // Simulate human scrolling
+          await pageObj.evaluate(() => {
+            window.scrollTo({ top: 300, behavior: "smooth" });
           });
+          await sleep(400, 900);
+          await pageObj.evaluate(() => {
+            window.scrollTo({ top: 700, behavior: "smooth" });
+          });
+          await sleep(300, 700);
 
-          return results;
-        });
+          // Extract products from the page
+          const products = await pageObj.evaluate(() => {
+            const results: Array<{
+              name: string;
+              url: string;
+              price: string;
+              originalPrice: string;
+              imageUrl: string;
+              brand: string;
+            }> = [];
+
+            // CW uses <li> cards with <a href*="/buy/"> links
+            const productLinks = document.querySelectorAll('a[href*="/buy/"]');
+            const seen = new Set<string>();
+
+            productLinks.forEach((link) => {
+              const href = (link as HTMLAnchorElement).href;
+              if (!href || seen.has(href)) return;
+              seen.add(href);
+
+              // CW product card is wrapped in <li>
+              const card = link.closest("li") || link.closest("article") || link.parentElement?.parentElement;
+
+              // Get product name - CW uses <p> inside the link
+              let name = "";
+              const nameEl = link.querySelector("p") || link.querySelector("span");
+              if (nameEl) {
+                name = nameEl.textContent?.trim() || "";
+              }
+              if (!name) {
+                name = link.textContent?.trim().split("\n")[0].trim() || "";
+              }
+
+              // Get price - CW uses <p class="text-colour-title-light headline-xl"> for current price
+              // and <p class="text-brand-red body-s-emphasis"> for discount info
+              let price = "";
+              let originalPrice = "";
+
+              // Find all <p> and <span> elements starting with $
+              const allEls = Array.from(card?.querySelectorAll("p, span") || []);
+              const priceEls = allEls.filter(el => el.textContent?.trim().startsWith("$"));
+
+              if (priceEls.length > 0) {
+                // First $ element is current price
+                price = priceEls[0].textContent?.trim() || "";
+              }
+
+              // Look for RRP/original price ("Was $X" or "$X Off RRP" pattern)
+              const rrpText = card?.textContent || "";
+              const rrpMatch = rrpText.match(/RRP\s*\$([\d.]+)/);
+              if (rrpMatch) {
+                originalPrice = "$" + rrpMatch[1];
+              }
+
+              // Get image
+              let imageUrl = "";
+              const img = card?.querySelector("img");
+              if (img) {
+                imageUrl = img.src || img.getAttribute("data-src") || "";
+              }
+
+              // Get brand (not always present in CW cards, skip)
+              const brand = "";
+
+              if (name && href && price) {
+                results.push({ name, url: href, price, originalPrice, imageUrl, brand });
+              }
+            });
+
+            return results;
+          });
 
         for (const p of products) {
           const currentPrice = parsePrice(p.price);

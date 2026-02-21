@@ -84,3 +84,9 @@
 - [x] Cookie 持久化（保存 session）
 - [x] 加入更多反偵測措施（隨機 viewport、滑鼠移動模擬）
 - [x] 更新 nixpacks.toml 確保 Railway 部署包含新依賴
+
+## 修復爬蟲選擇器（CW HTML 結構不符）
+- [x] 檢查 CW 網站實際 HTML 結構
+- [x] 修正產品卡片選擇器
+- [x] 修正價格選擇器
+- [x] 修正 browserContext 關閉錯誤（每個品類使用獨立 context）
